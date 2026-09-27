@@ -46,6 +46,14 @@ Settings file `debugger.json` is searched in this order:
 
 `--config FILE` overrides. `sdbg-dap` installs next to `sdbg` (not under `~/.config/sdbg/`).
 
+## Source view
+
+- Loading or running a target opens source for `main` from debug info (`info line main` / `image lookup`).
+- If symbols are missing, sdbg looks next to the binary for `name.c` / `.cc` / `.cpp`.
+- The current execution line is highlighted (gutter mark + line background).
+- Breakpoints are highlighted the same way; clicking the gutter sets a breakpoint immediately.
+- Source-map entries rewrite compile paths to local trees.
+
 ## Layout
 
 - `src/backend.hpp` — GDB/LLDB commands, CLI, JSON config
