@@ -1,5 +1,6 @@
 #include "test.h"
 #include "target_pty.hpp"
+
 #include <chrono>
 #include <thread>
 
@@ -20,7 +21,10 @@ static void test_start_stop() {
 static void test_echo_roundtrip() {
     std::string got;
     TargetPty pty([&](const std::string& s) { got += s; });
-    if (!pty.start()) { ++g_pass; return; }
+    if (!pty.start()) {
+        ++g_pass;
+        return;
+    }
     pty.write("hello-pty\n");
     for (int i = 0; i < 20 && got.find("hello") == std::string::npos; ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
