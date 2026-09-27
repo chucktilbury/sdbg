@@ -9,15 +9,19 @@
 class TargetPty {
 public:
     using DataFn = std::function<void(const std::string&)>;
+
     explicit TargetPty(DataFn on_data);
     ~TargetPty();
+
     bool start();
     void stop();
     bool alive() const { return alive_; }
     const std::string& slave_name() const { return slave_name_; }
     void write(const std::string& data);
+
 private:
     void reader();
+
     DataFn on_data_;
     int master_ = -1;
     std::string slave_name_;

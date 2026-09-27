@@ -1,5 +1,6 @@
 #include "test.h"
 #include "session.hpp"
+
 #include <fstream>
 
 static bool have_bin(const std::string& name) {
@@ -20,7 +21,9 @@ static void test_session_start_gdb() {
     try {
         auto r = s.command("help", 4.0);
         CHECK(!r.empty() || !out.empty());
-    } catch (...) { CHECK(false); }
+    } catch (...) {
+        CHECK(false);
+    }
     s.command_async(" ");
     s.stop();
     CHECK(!s.alive());
@@ -30,7 +33,11 @@ static void test_session_dead_command() {
     auto b = make_gdb("/usr/bin/gdb");
     DebuggerSession s(b, [](const std::string&) {});
     bool threw = false;
-    try { s.command("bt"); } catch (const std::exception&) { threw = true; }
+    try {
+        s.command("bt");
+    } catch (const std::exception&) {
+        threw = true;
+    }
     CHECK(threw);
 }
 
