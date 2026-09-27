@@ -1,0 +1,16 @@
+build/
+build-*/
+*.o
+*.a
+.cache/
+compile_commands.json
+debugger.json
+sdbg
+sdbg-dap
+debugger-gui
+debugger-dap
+tests/test_backend
+tests/test_pty
+tests/test_session
+.DS_Store
+*~
