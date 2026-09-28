@@ -76,7 +76,8 @@ static void test_lldb_commands() {
     auto l = make_lldb("/usr/bin/lldb");
     CHECK_STREQ(l.name, "lldb");
     CHECK_STREQ(l.continue_cmd, "process continue");
-    CHECK_STREQ(l.run_cmd(true), "run");
+    CHECK_STREQ(l.run_cmd(true), "process launch --stop-at-entry");
+    CHECK_STREQ(l.run_cmd(false), "process launch");
     CHECK_STREQ(l.select_frame(1), "frame select 1");
     CHECK_STREQ(l.select_thread(4), "thread select 4");
     CHECK_STREQ(l.eval_cmd("x"), "expression -- x");
@@ -99,15 +100,14 @@ static void test_lldb_commands() {
     auto load = l.load_target("/bin/ls");
     CHECK(contains(load, "platform select host"));
     auto p = l.apply_params("x", "/w", "K=V", "", false);
-    CHECK(contains(p, "target.cwd"));
+    CHECK(contains(p, "target.launch-working-dir"));
     CHECK(contains(p, "target.run-args x"));
-    CHECK(contains(p, "stop-at-entry false"));
     CHECK(contains(p, "target.env-vars K=\"V\""));
     auto io = l.io_cmds("/i", "/o", "/e", "", "");
     CHECK(contains(io, "input-path \"/i\""));
     auto fk = l.fork_cmds("ask", true);
     CHECK(contains(fk, "follow-fork-mode parent"));
-    CHECK(contains(fk, "detach-on-fork true"));
+    CHECK(contains(fk, "stop-on-fork false"));
 }
 
 static void test_config_roundtrip() {

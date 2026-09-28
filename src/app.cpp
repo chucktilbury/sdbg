@@ -7,6 +7,7 @@
 
 #include <fstream>
 #include <map>
+#include <unistd.h>
 #include <memory>
 #include <regex>
 #include <set>
@@ -19,6 +20,9 @@ namespace {
 const std::regex kFrameLldb(R"(^\s*\*? *frame #(\d+):\s+(\S+)\s+(.*)$)");
 const std::regex kFrameGdb(R"(^\s*\*? *#(\d+)\s+(\S+)\s+(.*)$)");
 const std::regex kLoc(R"(at ([^:\s]+):(\d+))");
+const std::regex kGdbLine(R"(Line\s+(\d+)\s+of\s+\"([^\"]+)\")");
+const std::regex kPathLine(R"((/[^:\s\"]+\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|m|mm|rs|go|s)):(\d+))");
+const std::regex kCompileUnit(R"(CompileUnit\s*=\s*(\S+))");
 
 std::vector<std::string> clean_lines(const std::string& text) {
     std::vector<std::string> out;
@@ -79,6 +83,21 @@ Gtk::ScrolledWindow* make_source_page(const std::string& path, const std::string
     gdk_rgba_parse(&cur_rgba, "#f1c40f");
     gtk_source_mark_attributes_set_background(cur_attr, &cur_rgba);
     gtk_source_view_set_mark_attributes(view, "current", cur_attr, 20);
+    auto* table = gtk_text_buffer_get_tag_table(GTK_TEXT_BUFFER(buf));
+    if (!gtk_text_tag_table_lookup(table, "sdbg-current")) {
+        gtk_text_buffer_create_tag(GTK_TEXT_BUFFER(buf), "sdbg-current",
+                                   "paragraph-background", "#5c4a12",
+                                   "background", "#5c4a12", nullptr);
+        gtk_text_buffer_create_tag(GTK_TEXT_BUFFER(buf), "sdbg-bp",
+                                   "paragraph-background", "#4a1c1c",
+                                   "background", "#4a1c1c", nullptr);
+        gtk_text_buffer_create_tag(GTK_TEXT_BUFFER(buf), "sdbg-current-light",
+                                   "paragraph-background", "#ffe082",
+                                   "background", "#ffe082", nullptr);
+        gtk_text_buffer_create_tag(GTK_TEXT_BUFFER(buf), "sdbg-bp-light",
+                                   "paragraph-background", "#ffcdd2",
+                                   "background", "#ffcdd2", nullptr);
+    }
     gtk_text_buffer_set_text(GTK_TEXT_BUFFER(buf), text.c_str(), -1);
     auto* lm = gtk_source_language_manager_get_default();
     auto* lang = gtk_source_language_manager_guess_language(lm, path.c_str(), nullptr);
@@ -830,6 +849,7 @@ private:
                                                      stop_at_entry_.get_active()))
                     session_->command(c);
                 apply_extended();
+                open_target_sources();
             }
             if (!cfg_.remote.empty()) session_->command(backend_.remote_cmd(cfg_.remote));
             if (!cfg_.core.empty())
@@ -883,6 +903,7 @@ private:
         cfg_.font_size = px;
         cfg_.theme = light ? "light" : "dark";
         for (auto& kv : buffers_) apply_source_scheme(kv.second, light);
+        refresh_all_marks();
     }
 
     void dbg_async(const std::string& cmd) {
@@ -953,8 +974,12 @@ private:
                     target_dispatch_.emit();
                 });
                 if (!target_pty_->start()) {
-                    Glib::signal_idle().connect_once(
-                        [this] { set_status("Failed to open target PTY", "#f28b82"); });
+                    auto err = target_pty_->last_error();
+                    Glib::signal_idle().connect_once([this, err] {
+                        set_status("Failed to open target PTY" +
+                                       (err.empty() ? std::string() : (": " + err)),
+                                   "#f28b82");
+                    });
                 }
             }
             if (target_pty_ && target_pty_->alive()) {
@@ -1011,6 +1036,7 @@ private:
                                                  stop_at_entry_.get_active()))
                 session_->command(c);
             apply_extended();
+            open_target_sources();
             Glib::signal_idle().connect_once(
                 [this, exe] { set_status("Loaded target " + exe, "#81c995"); });
         });
@@ -1050,6 +1076,7 @@ private:
                                                  stop_at_entry_.get_active()))
                 session_->command(c);
             apply_extended();
+            open_target_sources();
             session_->command_async(backend_.run_cmd(stop_at_entry_.get_active()));
             Glib::signal_idle().connect_once([this, exe] { set_status("Running " + exe, "#81c995"); });
         });
@@ -1069,6 +1096,7 @@ private:
         run_bg([this, exe] {
             for (auto& c : backend_.reload_cmds(exe)) session_->command(c);
             apply_extended();
+            open_target_sources();
             Glib::signal_idle().connect_once(
                 [this, exe] { set_status("Reloaded " + exe, "#81c995"); });
         });
@@ -1091,6 +1119,7 @@ private:
                 for (auto& c : backend_.load_target(exe)) session_->command(c);
             }
             session_->command(backend_.core_cmd(core, exe));
+            open_target_sources();
             Glib::signal_idle().connect_once([this] { refresh_state(); });
             Glib::signal_idle().connect_once(
                 [this, core] { set_status("Loaded core " + core, "#81c995"); });
@@ -1137,6 +1166,100 @@ private:
             lab->set_selectable(true);
             box.append(*lab);
         }
+    }
+
+    std::string map_source_path(std::string path) {
+        for (auto& [from, to] : parse_source_maps()) {
+            if (path.rfind(from, 0) == 0) {
+                path = to + path.substr(from.size());
+                break;
+            }
+        }
+        return path;
+    }
+
+    void collect_source_hits(const std::string& text,
+                             std::vector<std::pair<std::string, int>>& hits) {
+        std::smatch m;
+        auto add = [&](std::string path, int line) {
+            if (path.empty()) return;
+            hits.emplace_back(std::move(path), line > 0 ? line : 1);
+        };
+        auto it = text.cbegin();
+        while (std::regex_search(it, text.cend(), m, kGdbLine)) {
+            add(m[2].str(), std::stoi(m[1].str()));
+            it = m.suffix().first;
+        }
+        it = text.cbegin();
+        while (std::regex_search(it, text.cend(), m, kPathLine)) {
+            add(m[1].str(), std::stoi(m[2].str()));
+            it = m.suffix().first;
+        }
+        it = text.cbegin();
+        while (std::regex_search(it, text.cend(), m, kCompileUnit)) {
+            add(m[1].str(), 1);
+            it = m.suffix().first;
+        }
+        it = text.cbegin();
+        while (std::regex_search(it, text.cend(), m, kLoc)) {
+            add(m[1].str(), std::stoi(m[2].str()));
+            it = m.suffix().first;
+        }
+    }
+
+    void open_target_sources() {
+        if (!session_ || !session_->alive()) return;
+        std::string blob;
+        try {
+            for (auto& c : backend_.discover_source_cmds())
+                blob += session_->command(c) + "\n";
+        } catch (...) {
+            return;
+        }
+        std::vector<std::pair<std::string, int>> hits;
+        collect_source_hits(blob, hits);
+
+        auto exe = std::string(exe_.get_text());
+        if (hits.empty() && !exe.empty()) {
+            auto slash = exe.find_last_of('/');
+            auto dir = slash == std::string::npos ? std::string(".") : exe.substr(0, slash);
+            auto base = slash == std::string::npos ? exe : exe.substr(slash + 1);
+            const char* exts[] = {".c", ".cc", ".cpp", ".cxx", ".C"};
+            for (auto ext : exts) {
+                auto cand = dir + "/" + base + ext;
+                if (access(cand.c_str(), R_OK) == 0) {
+                    hits.emplace_back(cand, 1);
+                    break;
+                }
+                // strip extension from binary name
+                auto dot = base.find_last_of('.');
+                if (dot != std::string::npos) {
+                    cand = dir + "/" + base.substr(0, dot) + ext;
+                    if (access(cand.c_str(), R_OK) == 0) {
+                        hits.emplace_back(cand, 1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (hits.empty()) return;
+        std::vector<std::pair<std::string, int>> unique;
+        std::set<std::string> seen;
+        for (auto& h : hits) {
+            if (!seen.insert(h.first).second) continue;
+            unique.push_back(h);
+            if (unique.size() >= 8) break;
+        }
+        Glib::signal_idle().connect_once([this, unique] {
+            bool first = true;
+            for (auto h : unique) {
+                auto path = map_source_path(h.first);
+                if (access(path.c_str(), R_OK) == 0)
+                    show_source(path, h.second, first);
+                first = false;
+            }
+        });
     }
 
     void refresh_state() {
@@ -1427,26 +1550,41 @@ private:
         int line = gtk_text_iter_get_line(&it) + 1;
         auto spec = gd->path + ":" + std::to_string(line);
         gd->app->bp_.set_text(spec);
+        gd->app->bp_lines_[gd->path].insert(line);
+        gd->app->apply_marks(gd->path);
         gd->app->dbg(gd->app->backend_.breakpoint(spec));
+    }
+
+    void remember_bp(const std::string& raw, int line) {
+        if (line < 1) return;
+        auto real = resolve_source(raw);
+        if (!real.empty()) {
+            bp_lines_[real].insert(line);
+            return;
+        }
+        auto base = Glib::path_get_basename(raw);
+        for (auto& kv : buffers_) {
+            if (Glib::path_get_basename(kv.first) == base)
+                bp_lines_[kv.first].insert(line);
+        }
     }
 
     void parse_bp_locations(const std::string& text) {
         bp_lines_.clear();
         static const std::regex file_line(
             R"(file\s*=\s*'([^']+)'\s*,\s*line\s*=\s*(\d+))", std::regex::icase);
-        static const std::regex colon(R"((?:in\s+)?(\S+\.\w+):(\d+))");
-        std::smatch m;
+        static const std::regex colon(R"((?:at\s+|in\s+)?([^\s:,]+):(\d+))");
+        static const std::regex comma_line(R"(([^,\s]+\.\w+)\s*,\s*line\s+(\d+))", std::regex::icase);
         auto s = text;
         for (auto it = std::sregex_iterator(s.begin(), s.end(), file_line);
-             it != std::sregex_iterator(); ++it) {
-            auto real = resolve_source((*it)[1].str());
-            if (!real.empty()) bp_lines_[real].insert(std::stoi((*it)[2]));
-        }
+             it != std::sregex_iterator(); ++it)
+            remember_bp((*it)[1].str(), std::stoi((*it)[2]));
         for (auto it = std::sregex_iterator(s.begin(), s.end(), colon);
-             it != std::sregex_iterator(); ++it) {
-            auto real = resolve_source((*it)[1].str());
-            if (!real.empty()) bp_lines_[real].insert(std::stoi((*it)[2]));
-        }
+             it != std::sregex_iterator(); ++it)
+            remember_bp((*it)[1].str(), std::stoi((*it)[2]));
+        for (auto it = std::sregex_iterator(s.begin(), s.end(), comma_line);
+             it != std::sregex_iterator(); ++it)
+            remember_bp((*it)[1].str(), std::stoi((*it)[2]));
     }
 
     void clear_marks(GtkSourceBuffer* buf) {
@@ -1455,22 +1593,43 @@ private:
         gtk_text_buffer_get_bounds(GTK_TEXT_BUFFER(buf), &start, &end);
         gtk_source_buffer_remove_source_marks(buf, &start, &end, "breakpoint");
         gtk_source_buffer_remove_source_marks(buf, &start, &end, "current");
+        gtk_text_buffer_remove_tag_by_name(GTK_TEXT_BUFFER(buf), "sdbg-current", &start, &end);
+        gtk_text_buffer_remove_tag_by_name(GTK_TEXT_BUFFER(buf), "sdbg-bp", &start, &end);
+        gtk_text_buffer_remove_tag_by_name(GTK_TEXT_BUFFER(buf), "sdbg-current-light", &start, &end);
+        gtk_text_buffer_remove_tag_by_name(GTK_TEXT_BUFFER(buf), "sdbg-bp-light", &start, &end);
+    }
+
+    void tag_line(GtkSourceBuffer* buf, int line, const char* tag) {
+        if (!buf || line < 1) return;
+        GtkTextIter start, end;
+        gtk_text_buffer_get_iter_at_line(GTK_TEXT_BUFFER(buf), &start, line - 1);
+        end = start;
+        if (!gtk_text_iter_ends_line(&end)) gtk_text_iter_forward_to_line_end(&end);
+        gtk_text_iter_forward_char(&end);
+        gtk_text_buffer_apply_tag_by_name(GTK_TEXT_BUFFER(buf), tag, &start, &end);
     }
 
     void apply_marks(const std::string& path) {
         auto bit = buffers_.find(path);
         if (bit == buffers_.end() || !bit->second) return;
         clear_marks(bit->second);
-        auto add = [&](int line, const char* cat) {
+        bool light = theme_drop_.get_selected() == 1;
+        const char* cur_tag = light ? "sdbg-current-light" : "sdbg-current";
+        const char* bp_tag = light ? "sdbg-bp-light" : "sdbg-bp";
+        auto add = [&](int line, const char* cat, const char* tag) {
             if (line < 1) return;
             GtkTextIter it;
             gtk_text_buffer_get_iter_at_line(GTK_TEXT_BUFFER(bit->second), &it, line - 1);
             gtk_source_buffer_create_source_mark(bit->second, nullptr, cat, &it);
+            tag_line(bit->second, line, tag);
         };
         auto bps = bp_lines_.find(path);
         if (bps != bp_lines_.end())
-            for (int ln : bps->second) add(ln, "breakpoint");
-        if (path == current_src_) add(current_line_, "current");
+            for (int ln : bps->second) add(ln, "breakpoint", bp_tag);
+        if (path == current_src_) add(current_line_, "current", cur_tag);
+        auto vit = views_.find(path);
+        if (vit != views_.end() && vit->second)
+            gtk_source_view_set_highlight_current_line(vit->second, TRUE);
     }
 
     void refresh_all_marks() {

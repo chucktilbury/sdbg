@@ -9,9 +9,13 @@
 static std::string json_str(const std::string& s) {
     std::string o = "\"";
     for (char c : s) {
-        if (c == '"' || c == '\\') { o.push_back('\\'); o.push_back(c); }
-        else if (c == '\n') o += "\\n";
-        else o.push_back(c);
+        if (c == '"' || c == '\\') {
+            o.push_back('\\');
+            o.push_back(c);
+        } else if (c == '\n')
+            o += "\\n";
+        else
+            o.push_back(c);
     }
     o.push_back('"');
     return o;
@@ -26,7 +30,8 @@ static std::string read_message() {
     int len = 0;
     while (std::getline(std::cin, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.rfind("Content-Length:", 0) == 0) len = std::atoi(line.c_str() + 15);
+        if (line.rfind("Content-Length:", 0) == 0)
+            len = std::atoi(line.c_str() + 15);
         if (line.empty()) break;
     }
     if (len <= 0) return {};
@@ -65,8 +70,10 @@ int main() {
         if (msg.empty()) break;
         auto cmd = field(msg, "command");
         if (cmd == "initialize") {
-            ok(msg, "{\"supportsConfigurationDoneRequest\":true,\"supportsConditionalBreakpoints\":true}");
-            send("{\"type\":\"event\",\"event\":\"initialized\",\"seq\":" + std::to_string(seq_out++) + "}");
+            ok(msg,
+               "{\"supportsConfigurationDoneRequest\":true,\"supportsConditionalBreakpoints\":true}");
+            send("{\"type\":\"event\",\"event\":\"initialized\",\"seq\":" + std::to_string(seq_out++) +
+                 "}");
         } else if (cmd == "launch") {
             auto prog = field(msg, "program");
             if (!sess.alive()) sess.start();
@@ -75,6 +82,7 @@ int main() {
         } else if (cmd == "setBreakpoints") {
             auto path = field(msg, "path");
             sess.command("breakpoint delete --force");
+            // naive: look for "line":N
             std::string rest = msg;
             size_t p = 0;
             while ((p = rest.find("\"line\":", p)) != std::string::npos) {
@@ -102,7 +110,8 @@ int main() {
             ok(msg, "{\"threads\":[{\"id\":1,\"name\":\"1\"}]}");
         } else if (cmd == "stackTrace") {
             auto bt = sess.alive() ? sess.command("bt") : std::string();
-            ok(msg, "{\"stackFrames\":[{\"id\":0,\"name\":\"frame\",\"line\":1,\"column\":1}],\"totalFrames\":1}");
+            ok(msg, "{\"stackFrames\":[{\"id\":0,\"name\":\"frame\",\"line\":1,\"column\":1}],"
+                    "\"totalFrames\":1}");
             (void)bt;
         } else if (cmd == "disconnect" || cmd == "terminate") {
             if (sess.alive()) sess.command("quit", 1);

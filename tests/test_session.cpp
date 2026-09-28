@@ -14,6 +14,7 @@ static void test_session_start_gdb() {
     }
     std::string out;
     auto b = make_gdb({});
+    // Use CLI, not MI, so "help" is predictable
     b.argv = {b.binary, "-q", "--nh", "-ex", "set pagination off"};
     DebuggerSession s(b, [&](const std::string& t) { out += t; });
     CHECK(s.start());

@@ -70,8 +70,8 @@ struct Backend {
 
     std::string radix_cmd(bool hex) const {
         if (name == "gdb") return hex ? "set output-radix 16" : "set output-radix 10";
-        return hex ? "settings set target.display-hex-immediate true"
-                   : "settings set target.display-hex-immediate false";
+        return hex ? "settings set --exists target.display-hex-immediate true"
+                   : "settings set --exists target.display-hex-immediate false";
     }
 
     std::string expand_local_cmd(const std::string& var) const {
@@ -138,19 +138,18 @@ struct Backend {
             for (auto& p : parse_env(env)) cmds.push_back("set environment " + p);
         } else {
             if (!cwd.empty()) {
-                cmds.push_back("settings set target.exec-search-paths \"" + cwd + "\"");
+                cmds.push_back("settings set --exists target.exec-search-paths \"" + cwd + "\"");
                 cmds.push_back("platform settings -w \"" + cwd + "\"");
-                cmds.push_back("settings set target.cwd \"" + cwd + "\"");
+                cmds.push_back("settings set --exists target.launch-working-dir \"" + cwd + "\"");
             }
             if (!args.empty())
-                cmds.push_back("settings set target.run-args " + args);
+                cmds.push_back("settings set --exists target.run-args " + args);
             else
                 cmds.emplace_back("settings clear target.run-args");
-            cmds.push_back(std::string("settings set target.stop-at-entry ") +
-                           (stop_at_entry ? "true" : "false"));
+            (void)stop_at_entry;
             for (auto& p : parse_env(env)) {
                 auto eq = p.find('=');
-                cmds.push_back("settings set target.env-vars " + p.substr(0, eq) + "=\"" +
+                cmds.push_back("settings set --exists target.env-vars " + p.substr(0, eq) + "=\"" +
                                p.substr(eq + 1) + "\"");
             }
         }
@@ -165,8 +164,8 @@ struct Backend {
     }
 
     std::string run_cmd(bool stop_at_entry) const {
-        if (name == "gdb" && stop_at_entry) return "start";
-        return "run";
+        if (name == "gdb") return stop_at_entry ? "start" : "run";
+        return stop_at_entry ? "process launch --stop-at-entry" : "process launch";
     }
 
     std::vector<std::string> io_cmds(const std::string& stdin_path, const std::string& stdout_path,
@@ -183,15 +182,15 @@ struct Backend {
                 cmds.push_back(std::string("set args ") + args + redir);
         } else {
             if (!stdin_path.empty())
-                cmds.push_back("settings set target.input-path \"" + stdin_path + "\"");
+                cmds.push_back("settings set --exists target.input-path \"" + stdin_path + "\"");
             if (!stdout_path.empty())
-                cmds.push_back("settings set target.output-path \"" + stdout_path + "\"");
+                cmds.push_back("settings set --exists target.output-path \"" + stdout_path + "\"");
             if (!stderr_path.empty())
-                cmds.push_back("settings set target.error-path \"" + stderr_path + "\"");
+                cmds.push_back("settings set --exists target.error-path \"" + stderr_path + "\"");
             if (!tty.empty()) {
-                cmds.push_back("settings set target.input-path \"" + tty + "\"");
-                cmds.push_back("settings set target.output-path \"" + tty + "\"");
-                cmds.push_back("settings set target.error-path \"" + tty + "\"");
+                cmds.push_back("settings set --exists target.input-path \"" + tty + "\"");
+                cmds.push_back("settings set --exists target.output-path \"" + tty + "\"");
+                cmds.push_back("settings set --exists target.error-path \"" + tty + "\"");
             }
         }
         return cmds;
@@ -206,9 +205,9 @@ struct Backend {
             cmds.push_back("set follow-exec-mode new");
         } else {
             if (mode == "ask") mode = "parent";
-            cmds.push_back("settings set target.process.follow-fork-mode " + mode);
-            cmds.push_back(std::string("settings set target.process.detach-on-fork ") +
-                           (detach_on_fork ? "true" : "false"));
+            cmds.push_back("settings set --exists target.process.follow-fork-mode " + mode);
+            cmds.push_back(std::string("settings set --exists target.process.stop-on-fork ") +
+                           (detach_on_fork ? "false" : "true"));
         }
         return cmds;
     }
@@ -234,6 +233,12 @@ struct Backend {
             cmds.push_back("file \"" + exe + "\"");
         }
         return cmds;
+    }
+
+    std::vector<std::string> discover_source_cmds() const {
+        if (name == "gdb")
+            return {"info line main", "info sources", "info functions main"};
+        return {"image lookup -v -n main", "target modules dump symfile"};
     }
 
     std::string source_map_cmd(const std::string& from, const std::string& to) const {
@@ -267,7 +272,9 @@ inline std::string which_bin(const std::vector<std::string>& names) {
 inline Backend make_lldb(const std::string& override_bin = {}) {
     Backend b;
     b.name = "lldb";
-    b.binary = override_bin.empty() ? which_bin({"lldb-18", "lldb"}) : override_bin;
+    b.binary = override_bin.empty()
+                   ? which_bin({"lldb-22", "lldb-21", "lldb-20", "lldb-19", "lldb-18", "lldb"})
+                   : override_bin;
     b.prompt = "(lldb)";
     b.argv = {b.binary, "--no-use-colors",
               "-o", "settings set use-color false",
