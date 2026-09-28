@@ -1285,8 +1285,6 @@ private:
                     bool have_src = std::regex_search(fi, m, kLoc) || std::regex_search(bt, m, kLoc);
                     if (have_src)
                         show_source(m[1].str(), std::stoi(m[2].str()), true);
-                    else
-                        show_disassembly();
                     refresh_all_marks();
                 });
                 refresh_watches();

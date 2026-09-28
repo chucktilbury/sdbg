@@ -281,6 +281,8 @@ inline Backend make_lldb(const std::string& override_bin = {}) {
               "-o", "settings set prompt '(lldb) '",
               "-o", "settings set stop-line-count-before 0",
               "-o", "settings set stop-line-count-after 0",
+              "-o", "settings set stop-disassembly-count 0",
+              "-o", "settings set stop-disassembly-display never",
               "-o", "settings set auto-confirm true"};
     b.continue_cmd = "process continue";
     b.step_in = "thread step-in";
@@ -307,7 +309,8 @@ inline Backend make_gdb(const std::string& override_bin = {}) {
     b.argv = {b.binary, "-q", "--nh", "--interpreter=mi2",
               "-ex", "set pagination off",
               "-ex", "set confirm off",
-              "-ex", "set print pretty on"};
+              "-ex", "set print pretty on",
+              "-ex", "set disassemble-next-line off"};
     b.continue_cmd = "continue";
     b.step_in = "step";
     b.step_over = "next";
